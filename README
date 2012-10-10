@@ -1,0 +1,5 @@
+Establish a set of sequences, length 10-20 basepair, which are unique to promotor sequences.
+
+Approach: take all 1kb promotor sequences, chop them into all possible
+(overlapping) 10:20bp sub-sequences and pick the ones not occuring elsewhere in
+the genome
