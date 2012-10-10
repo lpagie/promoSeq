@@ -122,9 +122,14 @@ mtf <- list()
 # define all chromosomes
 all.chr <- paste('chr', c(1:22, 'X', 'Y'), sep='')
 # loop over chromosomes and retrieves motifs per chromosome
-for (chr in all.chr) {
-  mtf[[chr]] <- getMotifs(chr=chr, motif.len=motif.len, promo=promo)
-}
+#for (chr in all.chr) {
+#  mtf[[chr]] <- getMotifs(chr=chr, motif.len=motif.len, promo=promo)
+#}
+mtf <- mclapply(all.chr, 
+                motif.len=motif.len,
+                promo=promo,
+                mc.cores=4, 
+                mc.preschedule=FALSE)
 # combine list into matrix
 # mtf <- do.call(cbind, mtf)
 print(length(mtf))
