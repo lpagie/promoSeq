@@ -1,19 +1,33 @@
 ################################################################################
 #
-# Ludo Pagie, Wednesday, October 10 2012, 
+# Ludo Pagie, Wednesday, October 10 2012, getMotifs_LP121010.R
 #
 # DESCRIPTION
-#
+#   A script to find short sequences in promotor regions which occur multiple
+#   times in different promotors but not elsewhere, in the genome. These
+#   sequences could be used to design Talens in order to target Dam molecules
+#   to promotor regions in a cell. This is a project idea of Jop
 #
 # USAGE / ARGUMENTS
-#   - basepath: the project's base directory
-#   - usage: R --vanilla --args basepath [working.dir] < Rscript.R > log
+#   This script is to be used from the commandline, to cover a range of
+#   parameters (length of small sequences, length of promotor region). The CLI
+#   args are:
+#   - motif.len (length of small sequences)
+#   - promo.start (start of promotor region relative to TSS)
+#   - promo.end (idem for end of promotor)
+#   - genes.db (text file (compressed) with gene info
+#   - usage: R --vanilla --args seqlen promo.start promo.end genes.db < Rscript.R > log
 #
 # DATA
-#
+#   As input only genes.info retrieved from biomart (see trials_LP121005.R)
 #
 # OUTCOME
-#
+#   An RData file with two data structures:
+#     - motif.gene.count: a table of short sequences with counts, specifying
+#       the number of genes which have this sequence in the promotor
+#     - masked.genome.count: a table of the same short sequences (same order),
+#       specifying how often this sequence is found elsewhere in the genome, ie
+#       outside all promotor regions
 #
 ################################################################################
 
@@ -30,7 +44,7 @@ cat('date = ', date(), '\n\n')
 ################################################################################
 # INIT #########################################################################
 ################################################################################
-usage <- 'usage: R --vanilla --args basepath [work.dir] < Rscript.R > log'
+usage <- 'usage: R --vanilla --args seqlen promo.start promo.end genes.db < Rscript.R > log'
 ################################################################################
 
 
@@ -38,31 +52,124 @@ usage <- 'usage: R --vanilla --args basepath [work.dir] < Rscript.R > log'
 # GET PATH OF PROJECT'S BASE DIRECTORY FROM CMD LINE ARGUMENT ##################
 ################################################################################
 args <- commandArgs(trailing=TRUE)
-if (length(args) < 1)
+if (length(args) != 4)
   stop(usage)
-base.path <- as.character(args[1])
-base.path <- normalizePath(base.path)
-code.path <- normalizePath(file.path(base.path, 'code'))
-# data.path <- file.path(base.path, )
-if (length(args) > 1) {
-  work.dir <- args[2]
-} else {
-  work.dir <- sprintf('run_LP%s',format(Sys.time(), "%y%m%d%H%M"))
-}
-cat("working directory =", work.dir, '\n')
-dir.create(work.dir)
-setwd(work.dir)
+motif.len <- as.integer(args[1])
+promo.start <- as.integer(args[2])
+promo.end <- as.integer(args[3])
+genes.db <- as.character(args[4])
 ################################################################################
 
 ################################################################################
 # GLOBALS AND LIBRARIES ########################################################
 ################################################################################
 library(LPutils)
+library(BSgenome)
+library(BSgenome.Hsapiens.UCSC.hg19)
 ################################################################################
 
 ################################################################################
 # MAIN #########################################################################
 ################################################################################
+
+# load gene.info data
+(load(genes.db))
+
+# setup a table with promotor sequence data
+# length of promotor sequences
+promo.len <- promo.end - promo.start
+
+promo <- genes
+str.idx <- promo$strand == 1
+# pos strand
+promo$promo_end[str.idx] <- promo$start_position[str.idx] + promo.end - 1
+promo$promo_start[str.idx] <- promo$start_position[str.idx] - promo.len
+
+# neg strand
+promo$promo_start[! str.idx] <- promo$end_position[! str.idx] - promo.end + 1
+promo$promo_end[! str.idx] <- promo$end_position[! str.idx] + promo.len
+
+promo <- promo[,c('chromosome_name','promo_start','promo_end','strand','ensembl_gene_id')]
+names(promo)[1:3] <- c('seqname','start','end')
+
+promo <- promo[order(promo$seqname, promo$start),]
+# the chromosome names in the genes.db table are 1, 2, 3, 4, ... 
+# here, paste a 'chr' in front of seqname
+promo$seqname <- paste('chr',promo$seqname, sep='')
+
+# function to generate all motifs for 1 seqname, 1 motif.len
+getMotifs <- function(chr, motif.len, promo) {
+  # function to generate a character vector with all subsequences of length
+  # motif.len in all promotors (defined in promo) on chromosome chr
+
+  # get all start sites
+  start <- promo$start[promo$seqname == chr]
+  # nms <- promo$ensembl_gene_id[promo$seqname == chr]
+  # define IRanges with promo start sites and length
+  ir <- IRanges(start=start, width=promo.len, names=nms)
+  # retrieve the character sequences of the promotors
+  seqs <- as.character(Views(Hsapiens[[chr]], ir))
+  # define starts of all subsequences (ie 1:(promo.len - motif.len + 1))
+  rng <- 1:(promo.len - motif.len + 1)
+  # use substring he generate all subsequencesV
+  seqs <- sapply(seqs, substring , rng, rng + motif.len -1, use.names=FALSE)
+  return(seqs)
+}
+
+# get all motifs for all genes on all chromosomes, store as list, 1 chromose per list-element
+# for intermediate processing store motifs as list
+mtf <- list()
+# define all chromosomes
+all.chr <- paste('chr', c(1:22, 'X', 'Y'), sep='')
+# loop over chromosomes and retrieves motifs per chromosome
+for (chr in all.chr) {
+  mtf[[chr]] <- getMotifs(chr=chr, motif.len=motif.len, promo=promo)
+}
+# combine list into matrix
+# mtf <- do.call(cbind, mtf)
+print(length(mtf))
+# remove all duplicate motifs per promotor
+mtf.unique <- apply(mtf, 2, unique)
+print(length(mtf.unique))
+
+motif.gene.count <- table(mtf.unique)
+motif.gene.count <- motif.gene.count[motif.gene.count > 1]
+motif.gene.count <- motif.gene.count[ ! grepl('N', names(motif.gene.count)) ]
+
+Match2MaskedSeq <- function(chr, seq2mask, pdict) {
+  # helper function to count matches of patterns in pdict to a masked chromosome
+  # sequence (chr). The coordinates to mask are specified in seq2mask
+
+  # define regions to be masked as IRanges
+  rng <- IRanges(start=seq2mask$start[seq2mask$seqname == chr], end=seq2mask$end[seq2mask$seqname==chr])
+  # combine overlapping regions:
+  rng <- reduce(rng)
+  # create mask
+  msk <- Mask(length(Hsapiens[[chr]]), rng)
+  seq <- Hsapiens[[chr]]
+  # apply mask
+  masks(seq) <- msk
+  # get counts of matches on masked sequence, return as integer vector
+  countPDict(pdict, subject=seq)
+}
+
+# create pattern dictionary for pattern-matching
+pdict <- PDict(names(motif.gene.count))
+# collect counts in list
+masked.genome.count <- list()
+#for(chr in all.chr) {
+#  masked.genome.count[[chr]] <- foo(chr, seq2mask=promo, pdict=pdict)
+#}
+masked.genome.count <- mclapply(all.chr, 
+                                Match2MaskedSeq,  
+                                seq2mask=promo, 
+                                pdict=pdict, 
+                                mc.cores=4, 
+                                mc.preschedule=FALSE)
+masked.genome.count <- do.call(cbind, masked.genome.count)
+out.fname <- signString(sprintf('motifs_promo_%s_%s_motifLen_%s.RData', promo.start, promo.end, motif.len))
+save(file=out.fname, motif.gene.count, masked.genome.count)
+
 ################################################################################
 
 ################################################################################
@@ -76,206 +183,3 @@ cat('\n')
 ################################################################################
 
 
-library(BSgenome)
-library(BSgenome.Hsapiens.UCSC.hg19)
-library(biomaRt)
-
-promo.len <- 1000
-motifs <- list()
-for (motif.len in 10) {
-  motifs[[as.character(motif.len)]] <- list()
-  for (start in 1:(promo.len - motif.len + 1)) {
-    motifs[[as.character(motif.len)]][[start]] <- 
-      Views(Hsapiens$upstream1000[[1]], start=1:(promo.len - motif.len + 1), width=motif.len)
-      narrow(Hsapiens$upstream1000, start=start, end=start+motif.len - 1)
-  }
-}   
-
-
-promo.len <- 1000
-motifs <- list()
-for (motif.len in 10) {
-  motifs[[as.character(motif.len)]] <- sapply(Hsapiens$upstream1000, 
-      Views, start=1:(promo.len - motif.len + 1), width=motif.len)
-}  
-
-
-
-library(biomaRt)
-ensembl = useMart("ensembl", dataset = "hsapiens_gene_ensembl")
-attributes <- c("chromosome_name", "start_position","end_position", 'status','description','gene_biotype', 'ensembl_gene_id','transcript_count', 'strand','ensembl_transcript_id', 'transcript_start','transcript_end')
-
-res <- getBM(attributes = attributes, mart = ensembl)
-
-genes <- res[res$gene_biotype == 'protein_coding' & 
-             res$status == 'KNOWN' & 
-             res$chromosome_name %in% c(1:22, 'X', 'Y'),]
-
-promo <- genes
-str.idx <- promo$strand == 1
-# pos strand
-promo$promo_end[str.idx] <- promo$transcript_start[str.idx] - 1
-promo$promo_start[str.idx] <- promo$transcript_start[str.idx] - promo.len
-# neg strand
-promo$promo_start[! str.idx] <- promo$transcript_end[! str.idx] + 1
-promo$promo_end[! str.idx] <- promo$transcript_end[! str.idx] + promo.len
-
-promo <- promo[,c('chromosome_name','promo_start','promo_end','strand','ensembl_gene_id','ensembl_transcript_id')]
-names(promo)[1:3] <- c('seqname','start','end')
-
-promo <- promo[order(promo$seqname, promo$start),]
-promo$seqname <- paste('chr',promo$seqname, sep='')
-
-promo[,2:3]
-
-# get all views 
-tt <- sapply(10:20, function(motif.len) {apply(promo[,2:3], 1, function(p) seq(p[1], p[2]-motif.len))})
-
-tt <- sapply(10:20, function(motif.len) {
-             apply(promo, 1, function(p) {
-                   pos <- as.integer(p['start']) : (as.integer(p['end']) - motif.len)
-                   Views(Hsapiens[[p['seqname']]], 
-                         start=pos, 
-                         width=motif.len) 
-              })
-      })
-
-# memory issues; I have to many promotor sequences (well, that's one way of viewing the problem)
-library(BSgenome)
-library(BSgenome.Hsapiens.UCSC.hg19)
-library(biomaRt)
-
-promo.len <- 1000
-
-ensembl = useMart("ensembl", dataset = "hsapiens_gene_ensembl")
-attributes <- c("chromosome_name", "start_position","end_position", 'status','description','gene_biotype', 'ensembl_gene_id','transcript_count', 'strand')
-
-res <- getBM(attributes = attributes, mart = ensembl)
-
-genes <- res[res$gene_biotype == 'protein_coding' & 
-             res$status == 'KNOWN' & 
-             res$chromosome_name %in% c(1:22, 'X', 'Y'),]
-
-promo <- genes
-str.idx <- promo$strand == 1
-# pos strand
-promo$promo_end[str.idx] <- promo$start_position[str.idx] - 1
-promo$promo_start[str.idx] <- promo$start_position[str.idx] - promo.len
-# neg strand
-promo$promo_start[! str.idx] <- promo$end_position[! str.idx] + 1
-promo$promo_end[! str.idx] <- promo$end_position[! str.idx] + promo.len
-
-promo <- promo[,c('chromosome_name','promo_start','promo_end','strand','ensembl_gene_id')]
-names(promo)[1:3] <- c('seqname','start','end')
-
-promo <- promo[order(promo$seqname, promo$start),]
-promo$seqname <- paste('chr',promo$seqname, sep='')
-
-# 
-# 
-# tt <- sapply(10:20, function(motif.len) {
-#              apply(promo, 1, function(p) {
-#                    pos <- as.integer(p['start']) : (as.integer(p['end']) - motif.len)
-#                    IRanges(
-#                          start=pos, 
-#                          width=motif.len) 
-#               })
-#       })
-# 
-# 
-# #for (chr in  unique(promo$seqname))
-# chr <- 'chr22'
-# st <- promo$start[promo$seqname == chr]
-# for (motif.len in 10:20) {
-# 
-#   sapply(10:20, function(motif.len) {
-#   rng <- 0:(promo.len - motif.len)
-#   st2 <- rep(st, each=length(rng))
-#   cbind(st2 + rng, motif.len)})
-# 
-#   IRanges(start=st2, width=motif.len)
-# }
-
-# pattern matching needs to be done for 1 motif.len at the time
-
-# function to generate all motifs for 1 seqname, 1 motif.len
-getMotifs.org <- function(chr, motif.len, promo) {
-  start <- promo$start[promo$seqname == chr]
-  rng <- 0:(promo.len - motif.len)
-  start <- rep(start, each=length(rng))
-  nms <- promo$ensembl_gene_id[promo$seqname == chr]
-  nms <- rep(nms, each = length(rng))
-  nms <- paste(nms, rng, sep='_')
-  start <- start+rng
-  ir <- IRanges(start=start, width=motif.len, names=nms)
-  return(Views(Hsapiens[[chr]], ir))
-}
-
-getMotifs <- function(chr, motif.len, promo) {
-  start <- promo$start[promo$seqname == chr]
-  nms <- promo$ensembl_gene_id[promo$seqname == chr]
-  ir <- IRanges(start=start, width=promo.len, names=nms)
-  seqs <- as.character(Views(Hsapiens[[chr]], ir))
-  rng <- 1:(promo.len - motif.len + 1)
-  seqs <- sapply(seqs, substring , rng, rng + motif.len -1, use.names=FALSE)
-  return(seqs)
-}
-
-motif.len <- 20
-#chr <- 'chr22'
-
-#mtf <- getMotifs(chr=chr, motif.len=motif.len, promo=promo)
-
-mtf <- list()
-all.chr <- paste('chr', c(1:22, 'X', 'Y'), sep='')
-for (chr in all.chr) {
-  mtf[[chr]] <- getMotifs(chr=chr, motif.len=motif.len, promo=promo)
-}
-mtf <- do.call(cbind, mtf)
-mtf.unique <- apply(mtf, 2, unique)
-tbl <- table(mtf.unique)
-tbl <- tbl[tbl > 1]
-tbl <- tbl[ ! grepl('N', names(tbl)) ]
-
-# pdict <- PDict(names(tbl))
-# tt <- sapply(all.chr, function(chr) countPDict(pdict, subject=Hsapiens[[chr]]))
-
-foo <- function(chr, seq2mask, pdict) {
-  rng <- IRanges(start=seq2mask$start[seq2mask$seqname == chr], end=seq2mask$end[seq2mask$seqname==chr])
-  # combine overlapping regions:
-  rng <- reduce(rng)
-  # create mask
-  msk <- Mask(length(Hsapiens[[chr]]), rng)
-  seq <- Hsapiens[[chr]]
-  # apply mask
-  masks(seq) <- msk
-  # get matches on masked sequence
-  countPDict(pdict, subject=seq)
-}
-
-# chr2 <- all.chr[1]
-# cnts[[chr2]] <- foo(chr2)
-pdict <- PDict(names(tbl))
-cnts <- list()
-for(chr in all.chr) {
-  cnts[[chr]] <- foo(chr, seq2mask=promo, pdict=pdict)
-}
-cnts <- do.call(cbind, cnts)
-save(file='/tmp/tbl_cnts.RData', tbl, cnts)
-binding.outside.promo <- rowSums(cnts) > 0
-idx <- binding.outside.promo==FALSE & tbl > 100 & tbl < 200
-
- plot(rowSums(cnts)+.1, tbl, log='xy')
-tbl2 <- tbl[rowSums(cnts)==0]
-
-# the motifs need to match multiple genes but then should not match any other part in the genome
-# first I'll get motifs with hits in multiple genes
-# then I'll match motifs against a masked genome sequence, where promotor
-#   regions are masked so I don't care about hits in these regions
-# Mask() / masks()
-
-string2fa <- function(strings, names=NULL) {
-  if (is.null(names))
-    names <- as.character(seq.int(length(strings)))
-  paste(paste('>', names, sep=''), strings, sep='\n')
-}
