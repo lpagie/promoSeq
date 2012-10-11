@@ -106,13 +106,13 @@ getMotifs <- function(chr, motif.len, promo) {
   start <- promo$start[promo$seqname == chr]
   # nms <- promo$ensembl_gene_id[promo$seqname == chr]
   # define IRanges with promo start sites and length
-  ir <- IRanges(start=start, width=promo.len, names=nms)
+  ir <- IRanges(start=start, width=promo.len)
   # retrieve the character sequences of the promotors
   seqs <- as.character(Views(Hsapiens[[chr]], ir))
   # define starts of all subsequences (ie 1:(promo.len - motif.len + 1))
   rng <- 1:(promo.len - motif.len + 1)
   # use substring he generate all subsequencesV
-  seqs <- sapply(seqs, substring , rng, rng + motif.len -1, use.names=FALSE)
+  seqs <- sapply(seqs, substring , rng, rng + motif.len -1)
   return(seqs)
 }
 
